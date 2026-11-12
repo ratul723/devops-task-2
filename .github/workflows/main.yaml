@@ -1,0 +1,121 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    name: CI checks
+    uses: ./.github/workflows/ci.yaml
+
+  publish:
+    name: Build and push multi-arch image
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_ref: ${{ steps.vars.outputs.image }}:sha-${{ steps.vars.outputs.short_sha }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Compute image name and version
+        id: vars
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          if ! [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "VERSION must look like X.Y.Z, got '${version}'" >&2
+            exit 1
+          fi
+          {
+            echo "version=${version}"
+            echo "image=ghcr.io/${GITHUB_REPOSITORY,,}"
+            echo "short_sha=${GITHUB_SHA::7}"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v4
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image tags and OCI labels
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ steps.vars.outputs.image }}
+          tags: |
+            type=raw,value=${{ steps.vars.outputs.version }}
+            type=raw,value=sha-${{ steps.vars.outputs.short_sha }}
+            type=raw,value=latest
+
+      - name: Build and push (amd64 + arm64)
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            APP_VERSION=${{ steps.vars.outputs.version }}
+          cache-from: type=gha,scope=release
+          cache-to: type=gha,mode=max,scope=release
+          provenance: mode=max
+          sbom: true
+
+      - name: Smoke test the published image
+        env:
+          IMAGE: ${{ steps.vars.outputs.image }}:sha-${{ steps.vars.outputs.short_sha }}
+        run: |
+          docker run -d --name smoke -p 8080:8080 "$IMAGE"
+          for i in $(seq 1 15); do
+            if curl -fsS http://127.0.0.1:8080/health; then
+              echo; echo "smoke test passed"; exit 0
+            fi
+            sleep 2
+          done
+          docker logs smoke
+          exit 1
+
+  deploy:
+    name: Deploy to EC2 (runs only if DEPLOY_ENABLED=true)
+    needs: publish
+    if: ${{ vars.DEPLOY_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Deploy through SSM (script rolls back on failed smoke test)
+        env:
+          IMAGE: ${{ needs.publish.outputs.image_ref }}
+          INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+        run: |
+          command_id="$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --parameters "commands=[\"/opt/devops-task/deploy.sh ${IMAGE}\"]" \
+            --query Command.CommandId --output text)"
+          aws ssm wait command-executed \
+            --command-id "$command_id" --instance-id "$INSTANCE_ID"
