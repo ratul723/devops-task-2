@@ -10,3 +10,4 @@ health_log.txt
 *.tfstate
 *.tfstate.*
 .terraform/
+k8s/secret.yaml

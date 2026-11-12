@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: devops-app-config
+  namespace: devops
+data:
+  PORT: "8080"
+  LOG_LEVEL: "INFO"
+  ENVIRONMENT: "kubernetes-kind"
