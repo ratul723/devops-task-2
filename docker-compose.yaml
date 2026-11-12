@@ -12,6 +12,7 @@ services:
       PORT: "8080"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       ENVIRONMENT: ${ENVIRONMENT:-local}
+      ENABLE_FAULT_INJECTION: ${ENABLE_FAULT_INJECTION:-false}
     healthcheck:
       test: ["CMD", "python", "-m", "app.healthcheck"]
       interval: 30s

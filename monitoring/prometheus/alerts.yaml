@@ -1,0 +1,53 @@
+groups:
+  - name: app
+    rules:
+      - alert: AppInstanceDown
+        expr: up{job="app"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "App instance {{ $labels.instance }} is down"
+          description: "Prometheus could not scrape the app for over 1 minute."
+
+      - alert: AppHighErrorRate
+        expr: |
+          (sum(rate(http_errors_total[5m])) / sum(rate(http_requests_total[5m])) > 0.05)
+          and (sum(rate(http_requests_total[5m])) > 0.1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 5% of requests are failing with 5xx"
+
+      - alert: AppHighLatencyP95
+        expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[5m]))) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 latency above 500ms for 10 minutes"
+
+  - name: host
+    rules:
+      - alert: HostDiskUsageHigh
+        expr: |
+          100 * (1 - node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|fuse.*|nsfs|ramfs|devtmpfs"}
+                   / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs|fuse.*|nsfs|ramfs|devtmpfs"}) > 80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk {{ $labels.mountpoint }} is above 80% full"
+
+  - name: containers
+    rules:
+      - alert: ContainerMemoryNearLimit
+        expr: |
+          100 * container_memory_working_set_bytes{name!=""}
+              / on(name) (container_spec_memory_limit_bytes{name!=""} > 0) > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} is using over 90% of its memory limit"

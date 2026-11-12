@@ -1,0 +1,62 @@
+// 1. Find every container through the Docker socket
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+// 2. Turn Docker metadata into clean, low-cardinality labels
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+}
+
+// 3. Read the logs of those containers
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.containers.output
+  forward_to = [loki.process.json_logs.receiver]
+}
+
+// 4. Parse the app's JSON logs
+loki.process "json_logs" {
+  forward_to = [loki.write.default.receiver]
+
+  stage.match {
+    selector = "{service=\"app\"}"
+
+    stage.json {
+      expressions = {
+        level  = "level",
+        path   = "path",
+        method = "method",
+        status = "status",
+      }
+    }
+
+    // Low cardinality (about 4 values) -> safe as an indexed label
+    stage.labels {
+      values = { level = "" }
+    }
+
+    // Searchable, but NOT indexed -> no cardinality cost
+    stage.structured_metadata {
+      values = { path = "", method = "", status = "" }
+    }
+  }
+}
+
+// 5. Send everything to Loki
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

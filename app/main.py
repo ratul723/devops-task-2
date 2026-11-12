@@ -19,6 +19,7 @@ APP_VERSION = os.getenv("APP_VERSION", "0.1.0")
 ENVIRONMENT = os.getenv("ENVIRONMENT", "local")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 PORT = int(os.getenv("PORT", "8080"))
+ENABLE_FAULT_INJECTION = os.getenv("ENABLE_FAULT_INJECTION", "false").lower() == "true"
 
 
 # ---- Structured JSON logging to stdout ----
@@ -121,6 +122,11 @@ def health():
 def metrics():
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
+if ENABLE_FAULT_INJECTION:
+
+    @app.get("/boom")
+    def boom():
+        raise RuntimeError("simulated failure for observability demo")
 
 if __name__ == "__main__":
     # log_config=None: keep our JSON logging; access_log=False: we log requests ourselves
