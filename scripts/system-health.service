@@ -1,0 +1,11 @@
+[Unit]
+Description=System health check
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/system_health.sh --log-file /var/log/system_health/health_log.txt
+LogsDirectory=system_health
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
